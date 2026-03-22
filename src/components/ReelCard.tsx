@@ -106,7 +106,7 @@ const ReelCard = ({ reel, index, onOpenModal }: ReelCardProps) => {
               title="Copy prompt"
             >
               {copied ? (
-                <Check className="w-3.5 h-3.5 text-green-400" />
+                <Check className="w-3.5 h-3.5 text-primary" />
               ) : (
                 <Copy className="w-3.5 h-3.5 text-muted-foreground" />
               )}
