@@ -1,0 +1,266 @@
+Main app idea:
+you must have seen that creators heavily use this sentence: "comment prompt and i will send you the detailed prompt" "comment ai and i will send you the workbook" and so on.
+
+ so instead of managing one by one: i have build a website app. where a user can comes, scroll through all videos of that creator or optionally search for the reel the creator added (using reel id, or some keyword) and they will be shown the reel. Now whatever the creator mentioned in the reel will be available there. for example: creator added prompt. User will click on Reveal Prompt button to see the prompt. creator added workbook, user will click on download workbook . creator added some shop links, user can click on shop link button to see all linked products. etc.
+ .......................................................
+
+This is already done by me:
+
+A. Google Login (free, built into Supabase)
+
+Step 1 — Google Cloud Console (free)
+Go to console.cloud.google.com → Create a project → APIs & Services → Credentials → Create OAuth 2.0 Client ID. Set the redirect URI to https://your-project.supabase.co/auth/v1/callback.
+
+Step 2 — Supabase dashboard
+In your Supabase project → Authentication → Providers → Enable Google → paste your Client ID and Secret.
+
+You do this:
+Step 3 — In your React app
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+// Trigger Google login
+await supabase.auth.signInWithOAuth({ provider: 'google' })
+
+// Get the logged-in user anywhere
+const { data: { user } } = await supabase.auth.getUser()
+
+.......................................................................
+B. 3. Database schema (replace your Google Sheet)
+I have already ran this SQL in Supabase's SQL editor:
+-- Creators (one row per creator account)
+create table creators (
+  id uuid references auth.users primary key,
+  handle text unique not null,        -- dropreveal.com/handle
+  email text unique not null,
+  display_name text,
+  bio text,
+  avatar_url text,
+  created_at timestamptz default now()
+);
+
+-- Reels (each card on a creator's profile)
+create table reels (
+  id uuid primary key default gen_random_uuid(),
+  creator_id uuid references creators(id) on delete cascade,
+  reel_link text not null,
+  title text not null,
+  prompt text,                         -- the revealed prompt
+  created_at timestamptz default now()
+);
+
+-- Products (shop links attached to a reel, replaces link1..link4 columns)
+create table products (
+  id uuid primary key default gen_random_uuid(),
+  reel_id uuid references reels(id) on delete cascade,
+  name text,
+  link text,
+  image_url text,
+  price numeric,
+  original_price numeric,
+  display_order int default 0
+);
+
+-- Files (workbook / PDF downloads)
+create table files (
+  id uuid primary key default gen_random_uuid(),
+  reel_id uuid references reels(id) on delete cascade,
+  file_url text not null,              -- Supabase Storage URL
+  label text                           -- e.g. "Download Workbook"
+);
+
+Per-creator accounts with Row Level Security
+This is how each creator sees only their own data in the dashboard — and viewers can see any public creator's reels.
+sql
+-- Enable RLS on all tables
+-- Turn on RLS
+alter table creators enable row level security;
+alter table reels enable row level security;
+alter table products enable row level security;
+alter table files enable row level security;
+
+-- Public can read all creators and reels (viewer pages)
+create policy "public can read creators"
+  on creators for select using (true);
+
+create policy "public can read reels"
+  on reels for select using (true);
+
+create policy "public can read products"
+  on products for select using (true);
+
+create policy "public can read files"
+  on files for select using (true);
+
+-- Creators can only write/edit their own data
+create policy "creator manages own profile"
+  on creators for all
+  using (id = auth.uid());
+
+create policy "creator manages own reels"
+  on reels for all
+  using (creator_id = auth.uid());
+
+create policy "creator manages own products"
+  on products for all
+  using (
+    reel_id in (
+      select id from reels where creator_id = auth.uid()
+    )
+  );
+
+create policy "creator manages own files"
+  on files for all
+  using (
+    reel_id in (
+      select id from reels where creator_id = auth.uid()
+    )
+  );
+
+
+Auto-create creator row on signup
+When someone signs up via Google, Supabase creates a row in auth.users but not in your creators table. This trigger does it automatically. Run in SQL Editor:
+sqlcreate or replace function public.handle_new_user()
+returns trigger as $$
+begin
+  insert into public.creators (id, email, handle, display_name, avatar_url)
+  values (
+    new.id,
+    new.email,
+    -- default handle = part before @ in email, e.g. "john" from "john@gmail.com"
+    lower(split_part(new.email, '@', 1)),
+    coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1)),
+    new.raw_user_meta_data->>'avatar_url'
+  );
+  return new;
+end;
+$$ language plpgsql security definer;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+.......................................................................
+C. You do this 
+Install Supabase in your Vite + React app
+In your project terminal:
+bashnpm install @supabase/supabase-js
+Create a file src/lib/supabase.js:
+jsimport { createClient } from '@supabase/supabase-js'
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+Create .env.local in your project root (same level as package.json):
+VITE_SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key-here
+
+.env.local is gitignored by default in Vite. Never commit your keys.
+
+
+Step 7 — Replace your Google Sheets fetch
+You currently have something like this fetching the public CSV:
+js// OLD - Google Sheets
+const res = await fetch(`https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv`)
+const text = await res.text()
+// ... parse CSV
+Replace it with this:
+js// NEW - Supabase
+import { supabase } from './lib/supabase'
+
+// Fetch all reels for a creator by their handle
+const { data: creator } = await supabase
+  .from('creators')
+  .select('*')
+  .eq('handle', handle)   // e.g. 'john' from /john URL
+  .single()
+
+const { data: reels } = await supabase
+  .from('reels')
+  .select(`
+    *,
+    products (*),
+    files (*)
+  `)
+  .eq('creator_id', creator.id)
+  .order('created_at', { ascending: false })
+
+// reels is now an array like:
+// [{ id, title, prompt, reel_link, products: [...], files: [...] }]
+The select with nested products (*) and files (*) is Supabase's syntax for joining related tables in one query — replaces all your link1, image1, name1... flat columns.
+
+Step 8 — Add Google login button
+In whatever component handles login:
+jsximport { supabase } from '../lib/supabase'
+
+export function LoginButton() {
+  const handleLogin = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin + '/dashboard'
+      }
+    })
+  }
+
+  return (
+    <button onClick={handleLogin}>
+      Sign in with Google
+    </button>
+  )
+}
+And to get the current logged-in user anywhere:
+jsconst { data: { user } } = await supabase.auth.getUser()
+// user.id, user.email, etc.
+// null if not logged in
+
+
+7. Migrating from Google Sheets
+Migrate your existing Google Sheets data
+Run this once locally as a Node script to copy your current data into Supabase. First get your sheet's CSV URL (the same one you're already using), then:
+// migrate.mjs  — run with: node migrate.mjs
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  'https://xxxxxxxxxxxx.supabase.co',
+  'your-anon-key'
+)
+
+const CREATOR_ID = 'paste-your-uuid-here'  // your creator row id from Supabase table editor
+
+const res = await fetch('YOUR_GOOGLE_SHEETS_CSV_URL')
+const text = await res.text()
+const rows = text.split('\n').slice(1)  // skip header row
+
+for (const row of rows) {
+  const cols = row.split(',')
+  const [id, reel_link, prompt, title, l1, i1, n1, p1, op1, l2, i2, n2, p2, op2, l3, i3, n3, p3, op3, l4, i4, n4, p4, op4] = cols
+
+  if (!reel_link) continue
+
+  // Insert reel
+  const { data: reel } = await supabase
+    .from('reels')
+    .insert({ creator_id: CREATOR_ID, reel_link, title, prompt })
+    .select()
+    .single()
+
+  // Insert products
+  const products = [
+    { link: l1, image_url: i1, name: n1, price: p1, original_price: op1, display_order: 1 },
+    { link: l2, image_url: i2, name: n2, price: p2, original_price: op2, display_order: 2 },
+    { link: l3, image_url: i3, name: n3, price: p3, original_price: op3, display_order: 3 },
+    { link: l4, image_url: i4, name: n4, price: p4, original_price: op4, display_order: 4 },
+  ].filter(p => p.link)
+
+  if (products.length) {
+    await supabase.from('products').insert(
+      products.map(p => ({ ...p, reel_id: reel.id }))
+    )
+  }
+
+  console.log(`✓ Migrated: ${title}`)
+}
+
+console.log('Migration complete.')

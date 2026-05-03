@@ -1,0 +1,119 @@
+there is " shop this look" button
+when user clicks on this shop button.
+I want this type of design appearing on the bottom
+The user can slide to the right side all the links available.
+The backend is simple google sheet where there are columns named link1, link2, link3 and so on... 
+The frontend should check all the columns with this link name and see which are non empty.
+Then for all links it should show it in this design as shown in attached image.
+It should show image, then which platform link it is(myntra, amazon, flipkart etc.) , show price and buy button.
+
+I'll help you design this "Shop This Look" bottom sheet feature. Let me break down the architecture and design clearly.
+
+## Feature: "Shop This Look" Bottom Sheet
+
+### Overall UX Flow
+1. User watches a reel/post → clicks **"Shop This Look"** button
+2. A **bottom sheet slides up** from the bottom of the screen
+3. User sees a horizontally scrollable list of tagged products
+4. Each card shows: product image, platform badge, price, discount, and a Buy button
+
+---
+
+## Frontend Design Breakdown
+
+### Bottom Sheet Component
+- Fixed to bottom of viewport, slides up with a smooth animation (`translateY` transition)
+- Has a **drag handle** at the top (small pill shape)
+- **Two states:** collapsed (shows ~40% of screen) and expanded (shows ~85%)
+- Dark overlay behind it (semi-transparent backdrop)
+- Dismissible by tapping the backdrop or dragging down
+
+### Product Card (horizontal scroll)
+Each card should contain:
+
+```
+┌─────────────────────┐
+│                     │
+│   [Product Image]   │  ← Square image, rounded corners
+│                     │
+├─────────────────────┤
+│ [MYNTRA badge]      │  ← Platform logo + name, colored pill
+│ Fusionic Bandhani.. │  ← Product name, truncated at 2 lines
+│ ₹2304  ~~₹4800~~   │  ← Sale price bold, original strikethrough
+│ [52% OFF] [BUY →]  │  ← Discount badge + CTA button
+└─────────────────────┘
+```
+
+Card width: ~160–180px, fixed height, horizontal `overflow-x: scroll` with `snap` scrolling
+
+### Platform Color Coding
+apply colors matching my brand color theme with additional colors if required.
+
+---
+
+## Google Sheet Backend Logic
+
+### Sheet Structure
+| id | link1 | link2 | link3 | link4 |
+|---------|-------|-------|-------|-------|
+| 1 | https://myntra.com/... | https://amazon.in/... | | |
+
+### Frontend Logic (pseudocode)
+```javascript
+// 1. Fetch the row for the current reel
+const row = await fetchSheetRow(reelId);
+
+// 2. Collect all non-empty link columns
+const links = ['link1','link2','link3','link4','link5']
+  .map(key => row[key])
+  .filter(Boolean); // removes empty/null values
+
+// 3. For each link, detect platform + scrape/resolve metadata
+links.forEach(link => {
+  const platform = detectPlatform(link); // "myntra", "amazon", etc.
+  // Use Open Graph / product preview API to get image + price
+});
+```
+
+### How to Detect Platform from URL
+```javascript
+function detectPlatform(url) {
+  if (url.includes('myntra.com'))   return { name: 'Myntra',   color: '#FF3F6C' };
+  if (url.includes('amazon.in'))    return { name: 'Amazon',   color: '#FF9900' };
+  if (url.includes('flipkart.com')) return { name: 'Flipkart', color: '#2874F0' };
+  if (url.includes('meesho.com'))   return { name: 'Meesho',   color: '#9B2D8E' };
+  return { name: 'Shop', color: '#333' };
+}
+```
+
+---
+
+## Metadata Challenge (Important)
+
+Myntra/Amazon **block scrapers**, so you have two options:
+
+| Option | How | Pros | Cons |
+|--------|-----|------|------|
+| **Manual columns** | Add `image1`, `price1`, `name1` columns in sheet | Simple, no scraping | More data entry |
+| **Backend proxy** | Serverless function fetches Open Graph tags | Automatic | Needs a backend |
+| **Link preview API** | Use a service like `linkpreview.net` | Easy to integrate | Paid after free tier |
+
+**Recommended for simplicity:** Add extra columns in the sheet:
+
+| link1 | image1 | name1 | price1 | original_price1 |
+|-------|--------|-------|--------|-----------------|
+| https://myntra.com/... | https://img... | Fusionic Bandhani... | 2304 | 4800 |
+
+---
+
+## Animation Spec
+```css
+/* Bottom sheet slide-up */
+.bottom-sheet {
+  transform: translateY(100%);
+  transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.bottom-sheet.open {
+  transform: translateY(0);
+}
+```

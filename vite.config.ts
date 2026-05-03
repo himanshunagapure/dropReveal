@@ -5,6 +5,8 @@ import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
+  /** Expose `SUPABASE_*` from `.env` to the client (same keys many Supabase templates use). */
+  envPrefix: ["VITE_", "SUPABASE_"],
   server: {
     host: "::",
     port: 8080,
