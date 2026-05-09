@@ -29,4 +29,10 @@ export type DashboardReel = {
   created_at: string;
   products: DashboardProduct[] | null;
   files: DashboardFile[] | null;
+  /** Unlock mode — 'free' | 'password' | 'paid'. Defaults to 'free'. */
+  unlock_type?: "free" | "password" | "paid" | null;
+  /** Price in INR for paid unlock. */
+  unlock_price_inr?: number | null;
+  /** Hint shown to viewer before unlocking. */
+  unlock_note?: string | null;
 };

@@ -19,8 +19,10 @@ import {
   workbookStoragePathFromPublicUrl,
 } from "@/lib/workbookStorage";
 import { toast } from "sonner";
-import { Check, Loader2, Plus, Trash2, Upload } from "lucide-react";
+import { Check, Loader2, Plus, Trash2, Upload, Lock, Eye, DollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+type UnlockMode = "free" | "password" | "paid";
 
 type Mode = "create" | "edit";
 
@@ -50,18 +52,32 @@ function parseOptionalNumber(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function parseUnlockPrice(raw: string): number | null {
+  const t = raw.trim();
+  if (!t) return null;
+  const n = parseFloat(t.replace(/[^\d.]/g, ""));
+  return Number.isFinite(n) && n >= 10 ? n : null;
+}
+
 function reelWriteFields(fields: {
   reel_link: string;
   title: string;
   prompt: string;
   thumbnail: string;
+  unlock_type: string;
+  unlock_price_inr: string;
+  unlock_note: string;
 }) {
   const t = fields.thumbnail.trim();
+  const price = parseUnlockPrice(fields.unlock_price_inr);
   return {
     reel_link: fields.reel_link.trim(),
     title: fields.title.trim(),
     prompt: fields.prompt,
     thumbnail: (t ? t : null) as string | null,
+    unlock_type: fields.unlock_type,
+    unlock_price_inr: fields.unlock_type === "paid" ? price : null,
+    unlock_note: fields.unlock_note.trim() || null,
   };
 }
 
@@ -181,6 +197,13 @@ export function ReelEditorDialog({
   const [thumbnail, setThumbnail] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // ── Unlock settings ──────────────────────────────────────────────────────────
+  const [unlockMode, setUnlockMode] = useState<UnlockMode>("free");
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [unlockPriceInr, setUnlockPriceInr] = useState("");
+  const [unlockNote, setUnlockNote] = useState("");
+  const [savingPassword, setSavingPassword] = useState(false);
+
   // ── Section toggles ─────────────────────────────────────────────────────────
   const [showRevealText, setShowRevealText] = useState(false);
   const [showProducts, setShowProducts] = useState(false);
@@ -212,6 +235,13 @@ export function ReelEditorDialog({
 
   const clearFileForm = () => setFileLabel("Download Workbook");
 
+  const clearUnlockForm = () => {
+    setUnlockMode("free");
+    setUnlockPassword("");
+    setUnlockPriceInr("");
+    setUnlockNote("");
+  };
+
   // ── Init / re-init dialog state when it opens ────────────────────────────────
   useEffect(() => {
     if (!open) {
@@ -227,7 +257,7 @@ export function ReelEditorDialog({
         setReelLink(""); setTitle(""); setPrompt(""); setThumbnail("");
         setShowRevealText(false); setShowProducts(false); setShowFiles(false);
         setLocalProducts([]); setLocalFiles([]);
-        clearProductForm(); clearFileForm();
+        clearProductForm(); clearFileForm(); clearUnlockForm();
       }
       return;
     }
@@ -243,6 +273,10 @@ export function ReelEditorDialog({
       setShowRevealText(Boolean(reel.prompt?.trim()));
       setShowProducts(Boolean(reel.products?.length));
       setShowFiles(Boolean(reel.files?.length));
+      setUnlockMode((reel.unlock_type ?? "free") as UnlockMode);
+      setUnlockPriceInr(reel.unlock_price_inr != null ? String(reel.unlock_price_inr) : "");
+      setUnlockNote(reel.unlock_note ?? "");
+      setUnlockPassword(""); // never pre-filled — server-side only
       setLocalProducts(
         (reel.products ?? []).map((p) => ({
           _id: crypto.randomUUID(),
@@ -323,8 +357,25 @@ export function ReelEditorDialog({
       allProducts = [...allProducts, flushed];
     }
 
+    // Validate paid unlock price
+    if (unlockMode === "paid") {
+      const price = parseUnlockPrice(unlockPriceInr);
+      if (!price || price < 10) {
+        toast.error("Price must be at least ₹10 for paid unlocks.");
+        return;
+      }
+    }
+
     const effectivePrompt = showRevealText ? prompt : "";
-    const fields = reelWriteFields({ reel_link: reelLink, title, prompt: effectivePrompt, thumbnail });
+    const fields = reelWriteFields({
+      reel_link: reelLink,
+      title,
+      prompt: effectivePrompt,
+      thumbnail,
+      unlock_type: unlockMode,
+      unlock_price_inr: unlockPriceInr,
+      unlock_note: unlockNote,
+    });
 
     setSaving(true);
 
@@ -481,11 +532,49 @@ export function ReelEditorDialog({
       }
     }
 
+    // For password mode in create, set the password via backend after reel is created
+    if (unlockMode === "password" && unlockPassword.trim().length >= 4) {
+      try {
+        const BACKEND_URL = import.meta.env.VITE_BACKEND_URL as string;
+        await fetch(`${BACKEND_URL}/set-reel-password`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reel_id: newReelId, creator_id: userId, password: unlockPassword }),
+        });
+      } catch {
+        toast.warning("Reel created but password could not be saved. Set it from edit mode.");
+      }
+    }
+
     setSaving(false);
-    clearProductForm(); clearFileForm();
+    clearProductForm(); clearFileForm(); clearUnlockForm();
     toast.success(thumbSkippedCreate ? "Reel created (thumbnail skipped — run 001_reels_thumbnail.sql)." : "Reel created.");
     onSaved();
     onOpenChange(false);
+  };
+
+  // ── Save password via backend (bcrypt hashing, never client-side) ────────────
+  const handleSavePassword = async () => {
+    if (!reel?.id || !unlockPassword.trim() || unlockPassword.length < 4) {
+      toast.error("Password must be at least 4 characters.");
+      return;
+    }
+    setSavingPassword(true);
+    try {
+      const BACKEND_URL = import.meta.env.VITE_BACKEND_URL as string;
+      const res = await fetch(`${BACKEND_URL}/set-reel-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reel_id: reel.id, creator_id: userId, password: unlockPassword }),
+      });
+      if (!res.ok) throw new Error("Server error");
+      setUnlockPassword("");
+      toast.success("Password saved.");
+    } catch {
+      toast.error("Failed to save password. Check your backend connection.");
+    } finally {
+      setSavingPassword(false);
+    }
   };
 
   return (
@@ -537,6 +626,117 @@ export function ReelEditorDialog({
               onChange={(e) => setThumbnail(e.target.value)}
             />
           </div>
+        </div>
+
+        {/* ── Unlock Settings ── */}
+        <div className="space-y-3">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Unlock Settings
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                { mode: "free" as UnlockMode, label: "Free", icon: Eye },
+                { mode: "password" as UnlockMode, label: "Password", icon: Lock },
+                { mode: "paid" as UnlockMode, label: "Paid", icon: DollarSign },
+              ] as const
+            ).map(({ mode: m, label, icon: Icon }) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setUnlockMode(m)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-medium transition-all select-none",
+                  unlockMode === m
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-transparent text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                )}
+              >
+                {unlockMode === m && <Check className="h-3 w-3 shrink-0" />}
+                <Icon className="h-3 w-3 shrink-0" />
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {unlockMode === "free" && (
+            <p className="text-xs text-muted-foreground">
+              Content is visible immediately — no action required from viewers.
+            </p>
+          )}
+
+          {unlockMode === "password" && (
+            <div className="space-y-3 rounded-lg border border-dashed border-border/80 p-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="unlock-note" className="text-xs">Hint for viewers (optional)</Label>
+                <Input
+                  id="unlock-note"
+                  placeholder='e.g. "Check my story for the password"'
+                  value={unlockNote}
+                  onChange={(e) => setUnlockNote(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="unlock-password" className="text-xs">
+                  {mode === "edit" ? "Set new password" : "Password"}
+                </Label>
+                <Input
+                  id="unlock-password"
+                  type="password"
+                  placeholder="Min. 4 characters"
+                  value={unlockPassword}
+                  onChange={(e) => setUnlockPassword(e.target.value)}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Hashed server-side via bcrypt — never stored in plain text.
+                </p>
+              </div>
+              {mode === "edit" && reel?.id && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={savingPassword || unlockPassword.length < 4}
+                  onClick={handleSavePassword}
+                >
+                  {savingPassword && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Save Password Now
+                </Button>
+              )}
+            </div>
+          )}
+
+          {unlockMode === "paid" && (
+            <div className="space-y-3 rounded-lg border border-dashed border-border/80 p-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="unlock-price" className="text-xs">Price (₹) — minimum ₹10</Label>
+                <Input
+                  id="unlock-price"
+                  type="number"
+                  min={10}
+                  step={1}
+                  placeholder="e.g. 99"
+                  value={unlockPriceInr}
+                  onChange={(e) => setUnlockPriceInr(e.target.value)}
+                />
+                {unlockPriceInr && parseUnlockPrice(unlockPriceInr) != null && (
+                  <p className="text-[10px] text-muted-foreground">
+                    You earn ₹{(parseUnlockPrice(unlockPriceInr)! * 0.80).toFixed(2)} (free plan) ·
+                    ₹{(parseUnlockPrice(unlockPriceInr)! * 0.90).toFixed(2)} (Pro plan)
+                  </p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="unlock-note-paid" className="text-xs">Note for viewers (optional)</Label>
+                <Input
+                  id="unlock-note-paid"
+                  placeholder='e.g. "Includes the full 30-prompt pack"'
+                  value={unlockNote}
+                  onChange={(e) => setUnlockNote(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── Section toggles ── */}

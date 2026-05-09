@@ -61,6 +61,7 @@ function mapProductsToShopItems(products: ProductRow[] | null): ShopItem[] | und
 
 type ReelRow = {
   id: string;
+  creator_id: string;
   created_at?: string;
   reel_link: string;
   title: string;
@@ -68,6 +69,9 @@ type ReelRow = {
   thumbnail?: string | null;
   products: ProductRow[] | null;
   files: FileRow[] | null;
+  unlock_type?: "free" | "password" | "paid" | null;
+  unlock_price_inr?: number | null;
+  unlock_note?: string | null;
 };
 
 /** Newest reel first (last added appears at the top of the profile grid). */
@@ -87,7 +91,7 @@ export async function fetchReelsByCreatorHandle(handle: string): Promise<Reel[]>
 
   const { data: creator, error: creatorError } = await supabase
     .from("creators")
-    .select("id")
+    .select("id, is_pro")
     .eq("handle", h)
     .maybeSingle();
 
@@ -98,9 +102,12 @@ export async function fetchReelsByCreatorHandle(handle: string): Promise<Reel[]>
     );
   }
 
+  // unlock_password intentionally excluded — never sent to frontend
   const { data: rows, error: reelsError } = await supabase
     .from("reels")
-    .select("*, products (*), files (*)")
+    .select(
+      "id, creator_id, created_at, reel_link, title, prompt, thumbnail, unlock_type, unlock_price_inr, unlock_note, products(*), files(*)"
+    )
     .eq("creator_id", creator.id)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false });
@@ -110,13 +117,20 @@ export async function fetchReelsByCreatorHandle(handle: string): Promise<Reel[]>
 
   const ordered = sortReelsNewestFirst(rows as ReelRow[]);
 
+  const creatorIsPro = Boolean((creator as { id: string; is_pro?: boolean }).is_pro);
+
   return ordered.map((row) => {
     const shop_items = mapProductsToShopItems(row.products);
     const reel: Reel = {
       id: row.id,
+      creator_id: row.creator_id,
       reel_link: normalizeExternalUrl(row.reel_link),
       title: row.title,
       prompt: row.prompt ?? "",
+      unlock_type: row.unlock_type ?? "free",
+      unlock_price_inr: row.unlock_price_inr ?? null,
+      unlock_note: row.unlock_note ?? null,
+      creator_is_pro: creatorIsPro,
     };
     const thumb = (row.thumbnail ?? "").trim();
     if (thumb) reel.thumbnail = normalizeImageUrl(thumb);

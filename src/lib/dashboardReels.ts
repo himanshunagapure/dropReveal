@@ -4,9 +4,12 @@ import type { DashboardReel } from "@/types/dashboard";
 export const DASHBOARD_REELS_QUERY_KEY = "dashboard-reels" as const;
 
 export async function fetchDashboardReels(creatorId: string): Promise<DashboardReel[]> {
+  // unlock_password intentionally excluded — never sent to frontend
   const { data, error } = await supabase
     .from("reels")
-    .select("*, products(*), files(*)")
+    .select(
+      "id, creator_id, reel_link, title, prompt, thumbnail, created_at, unlock_type, unlock_price_inr, unlock_note, products(*), files(*)"
+    )
     .eq("creator_id", creatorId)
     .order("created_at", { ascending: false });
 
